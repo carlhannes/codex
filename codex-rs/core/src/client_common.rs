@@ -132,6 +132,9 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) text: Option<TextControls>,
+    /// Optional service tier for this request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) service_tier: Option<&'a str>,
 }
 
 pub(crate) fn create_reasoning_param_for_request(
@@ -202,6 +205,7 @@ mod tests {
             text: Some(TextControls {
                 verbosity: Some(OpenAiVerbosity::Low),
             }),
+            service_tier: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
@@ -230,6 +234,7 @@ mod tests {
             include: vec![],
             prompt_cache_key: None,
             text: None,
+            service_tier: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");

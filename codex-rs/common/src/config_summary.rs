@@ -25,5 +25,9 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
         ));
     }
 
+    if let Some(tier) = config.model_service_tier {
+        entries.push(("service tier", tier.to_string()));
+    }
+
     entries
 }

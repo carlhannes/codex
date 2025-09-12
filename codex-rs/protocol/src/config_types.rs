@@ -4,6 +4,21 @@ use strum_macros::Display;
 use strum_macros::EnumIter;
 use ts_rs::TS;
 
+/// Controls service tier for model requests.
+/// When set to `flex`, requests may be processed at a lower cost in exchange
+/// for potentially slower responses or temporary unavailability.
+/// Only takes effect if the target API supports the `service_tier` parameter.
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, TS, EnumIter,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ServiceTier {
+    #[default]
+    Auto,
+    Flex,
+}
+
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
     Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, TS, EnumIter,

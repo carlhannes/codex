@@ -45,6 +45,7 @@ use crate::token_data::PlanType;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
@@ -112,11 +113,16 @@ impl ModelClient {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
+                let service_tier = match self.config.model_service_tier {
+                    Some(ServiceTier::Flex) => Some("flex"),
+                    _ => None,
+                };
                 let response_stream = stream_chat_completions(
                     prompt,
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
+                    service_tier,
                 )
                 .await?;
 
@@ -187,29 +193,47 @@ impl ModelClient {
             None
         };
 
-        let payload = ResponsesApiRequest {
-            model: &self.config.model,
-            instructions: &full_instructions,
-            input: &input_with_instructions,
-            tools: &tools_json,
-            tool_choice: "auto",
-            parallel_tool_calls: false,
-            reasoning,
-            store: false,
-            stream: true,
-            include,
-            prompt_cache_key: Some(self.conversation_id.to_string()),
-            text,
-        };
-
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
+        let desired_flex = matches!(self.config.model_service_tier, Some(ServiceTier::Flex));
+        let mut flex_fallback_used = false;
+
+        // Compute effective idle timeout with flex tolerance.
+        let mut effective_idle = self.provider.stream_idle_timeout();
+        if desired_flex {
+            let flex_idle = Duration::from_secs(900);
+            if flex_idle > effective_idle {
+                effective_idle = flex_idle;
+            }
+        }
 
         loop {
             attempt += 1;
 
             // Always fetch the latest auth in case a prior attempt refreshed the token.
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
+
+            let service_tier = if desired_flex && !flex_fallback_used {
+                Some("flex")
+            } else {
+                None
+            };
+
+            let payload = ResponsesApiRequest {
+                model: &self.config.model,
+                instructions: &full_instructions,
+                input: &input_with_instructions,
+                tools: &tools_json,
+                tool_choice: "auto",
+                parallel_tool_calls: false,
+                reasoning,
+                store: false,
+                stream: true,
+                include: include.clone(),
+                prompt_cache_key: Some(self.conversation_id.to_string()),
+                text,
+                service_tier,
+            };
 
             trace!(
                 "POST to {}: {}",
@@ -255,11 +279,7 @@ impl ModelClient {
 
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
-                    tokio::spawn(process_sse(
-                        stream,
-                        tx_event,
-                        self.provider.stream_idle_timeout(),
-                    ));
+                    tokio::spawn(process_sse(stream, tx_event, effective_idle));
 
                     return Ok(ResponseStream { rx_event });
                 }
@@ -289,6 +309,7 @@ impl ModelClient {
                     // negligible.
                     if !(status == StatusCode::TOO_MANY_REQUESTS
                         || status == StatusCode::UNAUTHORIZED
+                        || status == StatusCode::REQUEST_TIMEOUT
                         || status.is_server_error())
                     {
                         // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
@@ -313,6 +334,13 @@ impl ModelClient {
                                 }));
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
                                 return Err(CodexErr::UsageNotIncluded);
+                            } else if error.code.as_deref() == Some("resource_unavailable")
+                                && desired_flex
+                                && !flex_fallback_used
+                            {
+                                // Retry once without service_tier to fall back to standard processing.
+                                flex_fallback_used = true;
+                                continue;
                             }
                         }
                     }

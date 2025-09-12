@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 
 /// Collection of common configuration options that a user can define as a unit
@@ -20,6 +21,7 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
+    pub model_service_tier: Option<ServiceTier>,
 }
 
 impl From<ConfigProfile> for codex_protocol::mcp_protocol::Profile {

@@ -34,6 +34,7 @@ pub(crate) async fn stream_chat_completions(
     model_family: &ModelFamily,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
+    service_tier: Option<&str>,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -268,25 +269,36 @@ pub(crate) async fn stream_chat_completions(
     }
 
     let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
-    let payload = json!({
-        "model": model_family.slug,
-        "messages": messages,
-        "stream": true,
-        "tools": tools_json,
-    });
 
-    debug!(
-        "POST to {}: {}",
-        provider.get_full_url(&None),
-        serde_json::to_string_pretty(&payload).unwrap_or_default()
-    );
-
+    // Loop variables for retries and optional flex fallback.
     let mut attempt = 0;
     let max_retries = provider.request_max_retries();
+    let desired_flex = matches!(service_tier, Some("flex"));
+    let mut flex_fallback_used = false;
+
     loop {
         attempt += 1;
 
         let req_builder = provider.create_request_builder(client, &None).await?;
+
+        // Build request payload for this attempt (may omit service_tier when falling back).
+        let mut payload = json!({
+            "model": model_family.slug,
+            "messages": messages,
+            "stream": true,
+            "tools": tools_json,
+        });
+        if desired_flex && !flex_fallback_used {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("service_tier".to_string(), json!("flex"));
+            }
+        }
+
+        debug!(
+            "POST to {}: {}",
+            provider.get_full_url(&None),
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
@@ -298,16 +310,23 @@ pub(crate) async fn stream_chat_completions(
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
-                tokio::spawn(process_chat_sse(
-                    stream,
-                    tx_event,
-                    provider.stream_idle_timeout(),
-                ));
+                // Extend idle timeout under flex to tolerate slower starts.
+                let mut idle = provider.stream_idle_timeout();
+                if desired_flex {
+                    let flex_idle = Duration::from_secs(900);
+                    if flex_idle > idle {
+                        idle = flex_idle;
+                    }
+                }
+                tokio::spawn(process_chat_sse(stream, tx_event, idle));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
                 let status = res.status();
-                if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
+                if !(status == StatusCode::TOO_MANY_REQUESTS
+                    || status == StatusCode::REQUEST_TIMEOUT
+                    || status.is_server_error())
+                {
                     let body = (res.text().await).unwrap_or_default();
                     return Err(CodexErr::UnexpectedStatus(status, body));
                 }
@@ -321,6 +340,30 @@ pub(crate) async fn stream_chat_completions(
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|v| v.to_str().ok())
                     .and_then(|s| s.parse::<u64>().ok());
+
+                if status == StatusCode::TOO_MANY_REQUESTS {
+                    // Check for resource_unavailable to trigger fallback to standard processing.
+                    #[derive(serde::Deserialize)]
+                    struct ChatErr {
+                        code: Option<String>,
+                        message: Option<String>,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct ChatErrResp {
+                        error: Option<ChatErr>,
+                    }
+                    let body_text = res.text().await.unwrap_or_default();
+                    if let Ok(parsed) = serde_json::from_str::<ChatErrResp>(&body_text) {
+                        if let Some(err) = parsed.error
+                            && err.code.as_deref() == Some("resource_unavailable")
+                            && desired_flex
+                            && !flex_fallback_used
+                        {
+                            flex_fallback_used = true;
+                            continue;
+                        }
+                    }
+                }
 
                 let delay = retry_after_secs
                     .map(|s| Duration::from_millis(s * 1_000))
