@@ -6,6 +6,7 @@ use toml_edit::DocumentMut;
 
 pub const CONFIG_KEY_MODEL: &str = "model";
 pub const CONFIG_KEY_EFFORT: &str = "model_reasoning_effort";
+pub const CONFIG_KEY_SERVICE_TIER: &str = "model_service_tier";
 
 /// Persist overrides into `config.toml` using explicit key segments per
 /// override. This avoids ambiguity with keys that contain dots or spaces.

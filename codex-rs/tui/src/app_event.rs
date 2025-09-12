@@ -7,6 +7,7 @@ use crate::history_cell::HistoryCell;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
+use codex_core::protocol_config_types::ServiceTier;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -50,6 +51,9 @@ pub(crate) enum AppEvent {
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
+
+    /// Update the current service tier in the running app and widget.
+    UpdateServiceTier(ServiceTier),
 
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),

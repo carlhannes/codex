@@ -35,6 +35,7 @@ pub(crate) async fn stream_chat_completions(
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
     service_tier: Option<&str>,
+    flex_attempts: u8,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -273,8 +274,11 @@ pub(crate) async fn stream_chat_completions(
     // Loop variables for retries and optional flex fallback.
     let mut attempt = 0;
     let max_retries = provider.request_max_retries();
+    let std_retries_remaining = max_retries;
+    let mut std_retries_remaining = max_retries;
     let desired_flex = matches!(service_tier, Some("flex"));
-    let mut flex_fallback_used = false;
+    // Allow configured attempts using Flex before falling back to standard processing.
+    let mut flex_attempts_left: u8 = if desired_flex { flex_attempts } else { 0 };
 
     loop {
         attempt += 1;
@@ -288,10 +292,9 @@ pub(crate) async fn stream_chat_completions(
             "stream": true,
             "tools": tools_json,
         });
-        if desired_flex && !flex_fallback_used {
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("service_tier".to_string(), json!("flex"));
-            }
+        let use_flex_this_attempt = flex_attempts_left > 0;
+        if use_flex_this_attempt && let Some(obj) = payload.as_object_mut() {
+            obj.insert("service_tier".to_string(), json!("flex"));
         }
 
         debug!(
@@ -331,10 +334,6 @@ pub(crate) async fn stream_chat_completions(
                     return Err(CodexErr::UnexpectedStatus(status, body));
                 }
 
-                if attempt > max_retries {
-                    return Err(CodexErr::RetryLimit(status));
-                }
-
                 let retry_after_secs = res
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
@@ -353,29 +352,42 @@ pub(crate) async fn stream_chat_completions(
                         error: Option<ChatErr>,
                     }
                     let body_text = res.text().await.unwrap_or_default();
-                    if let Ok(parsed) = serde_json::from_str::<ChatErrResp>(&body_text) {
-                        if let Some(err) = parsed.error
-                            && err.code.as_deref() == Some("resource_unavailable")
-                            && desired_flex
-                            && !flex_fallback_used
-                        {
-                            flex_fallback_used = true;
-                            continue;
-                        }
+                    if let Ok(parsed) = serde_json::from_str::<ChatErrResp>(&body_text)
+                        && let Some(err) = parsed.error
+                        && err.code.as_deref() == Some("resource_unavailable")
+                        && use_flex_this_attempt
+                        && flex_attempts_left > 0
+                    {
+                        // Consume a flex attempt and retry immediately without sleeping.
+                        flex_attempts_left -= 1;
+                        continue;
                     }
                 }
 
                 let delay = retry_after_secs
                     .map(|s| Duration::from_millis(s * 1_000))
                     .unwrap_or_else(|| backoff(attempt));
-                tokio::time::sleep(delay).await;
+                if use_flex_this_attempt && flex_attempts_left > 0 {
+                    flex_attempts_left -= 1;
+                    tokio::time::sleep(delay).await;
+                } else if std_retries_remaining > 0 {
+                    std_retries_remaining -= 1;
+                    tokio::time::sleep(delay).await;
+                } else {
+                    return Err(CodexErr::RetryLimit(status));
+                }
             }
             Err(e) => {
-                if attempt > max_retries {
+                let delay = backoff(attempt);
+                if use_flex_this_attempt && flex_attempts_left > 0 {
+                    flex_attempts_left -= 1;
+                    tokio::time::sleep(delay).await;
+                } else if std_retries_remaining > 0 {
+                    std_retries_remaining -= 1;
+                    tokio::time::sleep(delay).await;
+                } else {
                     return Err(e.into());
                 }
-                let delay = backoff(attempt);
-                tokio::time::sleep(delay).await;
             }
         }
     }

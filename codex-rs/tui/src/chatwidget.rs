@@ -836,6 +836,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::ServiceTier => {
+                self.open_service_tier_popup();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1185,6 +1188,7 @@ impl ChatWidget {
                     model: Some(model_slug.clone()),
                     effort: Some(effort),
                     summary: None,
+                    service_tier: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
@@ -1212,6 +1216,52 @@ impl ChatWidget {
         );
     }
 
+    /// Open a popup to choose the service tier (auto or flex).
+    pub(crate) fn open_service_tier_popup(&mut self) {
+        use codex_core::protocol_config_types::ServiceTier;
+
+        let current = self.config.model_service_tier.unwrap_or(ServiceTier::Auto);
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        for (name, tier) in [("Auto", ServiceTier::Auto), ("Flex", ServiceTier::Flex)] {
+            let is_current = current == tier;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: Some(tier),
+                }));
+                tx.send(AppEvent::UpdateServiceTier(tier));
+            })];
+
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: None,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Service Tier".to_string(),
+            Some("Choose between standard (auto) and flex processing".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    pub(crate) fn set_service_tier(
+        &mut self,
+        tier: codex_core::protocol_config_types::ServiceTier,
+    ) {
+        self.config.model_service_tier = Some(tier);
+    }
+
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
@@ -1233,6 +1283,7 @@ impl ChatWidget {
                     model: None,
                     effort: None,
                     summary: None,
+                    service_tier: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));

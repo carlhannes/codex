@@ -79,7 +79,7 @@ pub enum ResponseEvent {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, Copy)]
 pub(crate) struct Reasoning {
     pub(crate) effort: ReasoningEffortConfig,
     pub(crate) summary: ReasoningSummaryConfig,

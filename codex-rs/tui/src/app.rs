@@ -12,8 +12,11 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::config_edit::CONFIG_KEY_SERVICE_TIER;
+use codex_core::config_edit::persist_non_null_overrides;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol_config_types::ServiceTier;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -309,6 +312,16 @@ impl App {
                 self.model_saved_to_global = false;
                 self.show_model_save_hint();
             }
+            AppEvent::UpdateServiceTier(tier) => {
+                self.chat_widget.set_service_tier(tier);
+                self.config.model_service_tier = Some(tier);
+                self.model_saved_to_profile = false;
+                self.model_saved_to_global = false;
+                let tier_str = tier.to_string();
+                self.chat_widget.add_info_message(format!(
+                    "Service tier switched to {tier_str}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
+                ));
+            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.chat_widget.set_approval_policy(policy);
             }
@@ -366,6 +379,21 @@ impl App {
                 {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
+                        // Also persist service tier for profile
+                        let tier_str = self
+                            .config
+                            .model_service_tier
+                            .unwrap_or(ServiceTier::Auto)
+                            .to_string();
+                        if let Err(err) = persist_non_null_overrides(
+                            &codex_home,
+                            Some(profile),
+                            &[(&[CONFIG_KEY_SERVICE_TIER], Some(tier_str.as_str()))],
+                        )
+                        .await
+                        {
+                            tracing::error!("failed to persist service tier for profile: {err}");
+                        }
                         self.chat_widget.add_info_message(format!(
                             "Saved model {model} ({effort}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
                         ));
@@ -385,6 +413,21 @@ impl App {
                 match persist_model_selection(&codex_home, None, &model, Some(effort)).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
+                        // Also persist global service tier
+                        let tier_str = self
+                            .config
+                            .model_service_tier
+                            .unwrap_or(ServiceTier::Auto)
+                            .to_string();
+                        if let Err(err) = persist_non_null_overrides(
+                            &codex_home,
+                            None,
+                            &[(&[CONFIG_KEY_SERVICE_TIER], Some(tier_str.as_str()))],
+                        )
+                        .await
+                        {
+                            tracing::error!("failed to persist global service tier: {err}");
+                        }
                         self.chat_widget.add_info_message(format!(
                             "Saved model {model} ({effort}) as your global default."
                         ));

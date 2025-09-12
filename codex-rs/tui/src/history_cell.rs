@@ -951,6 +951,11 @@ pub(crate) fn new_status_output(
         lines.push(vec!["  • Reasoning Summaries: ".into(), title_case(&rsum).into()].into());
     }
 
+    let tier = lookup("service tier");
+    if !tier.is_empty() {
+        lines.push(vec!["  • Service Tier: ".into(), title_case(&tier).into()].into());
+    }
+
     lines.push("".into());
 
     // 💻 Client

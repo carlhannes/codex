@@ -1100,6 +1100,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                service_tier,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
@@ -1126,6 +1127,9 @@ async fn submission_loop(
                 updated_config.model_family = effective_family.clone();
                 if let Some(model_info) = get_model_info(&effective_family) {
                     updated_config.model_context_window = Some(model_info.context_window);
+                }
+                if let Some(tier) = service_tier {
+                    updated_config.model_service_tier = Some(tier);
                 }
 
                 let client = ModelClient::new(
@@ -1171,6 +1175,7 @@ async fn submission_loop(
 
                 // Optionally persist changes to model / effort
                 let effort_str = effort.map(|_| effective_effort.to_string());
+                let tier_str = service_tier.map(|t| t.to_string());
 
                 if let Err(e) = persist_non_null_overrides(
                     &config.codex_home,
@@ -1178,6 +1183,10 @@ async fn submission_loop(
                     &[
                         (&[CONFIG_KEY_MODEL], model.as_deref()),
                         (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
+                        (
+                            &[crate::config_edit::CONFIG_KEY_SERVICE_TIER],
+                            tier_str.as_deref(),
+                        ),
                     ],
                 )
                 .await
@@ -1671,8 +1680,41 @@ async fn run_turn(
     };
 
     let mut retries = 0;
+    // Track how many attempts we should make using Flex for streaming before falling back
+    // to standard processing for the remainder of this turn.
+    let original_is_flex = matches!(
+        turn_context.client.get_service_tier(),
+        Some(codex_protocol::config_types::ServiceTier::Flex)
+    );
+    let mut stream_flex_attempts_left: u8 = if original_is_flex {
+        turn_context.client.flex_attempts_before_fallback()
+    } else {
+        0
+    };
+    let mut std_stream_retries_remaining = turn_context.client.get_provider().stream_max_retries();
     loop {
-        match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt).await {
+        // Choose effective client for this attempt: use Flex while attempts remain, else fallback to standard.
+        let use_flex_this_attempt = stream_flex_attempts_left > 0 && original_is_flex;
+        // Build a temporary TurnContext when falling back so that rollout/token info stays consistent.
+        let temp_turn_ctx_storage; // keep storage alive for the borrowed reference
+        let effective_ctx: &TurnContext = if !use_flex_this_attempt {
+            let client = turn_context.client.with_service_tier_override(None);
+            temp_turn_ctx_storage = TurnContext {
+                client,
+                cwd: turn_context.cwd.clone(),
+                base_instructions: turn_context.base_instructions.clone(),
+                user_instructions: turn_context.user_instructions.clone(),
+                approval_policy: turn_context.approval_policy,
+                sandbox_policy: turn_context.sandbox_policy.clone(),
+                shell_environment_policy: turn_context.shell_environment_policy.clone(),
+                tools_config: turn_context.tools_config.clone(),
+            };
+            &temp_turn_ctx_storage
+        } else {
+            turn_context
+        };
+
+        match try_run_turn(sess, effective_ctx, turn_diff_tracker, &sub_id, &prompt).await {
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
@@ -1680,16 +1722,30 @@ async fn run_turn(
                 return Err(e);
             }
             Err(e) => {
-                // Use the configured provider-specific stream retry budget.
-                let max_retries = turn_context.client.get_provider().stream_max_retries();
-                if retries < max_retries {
+                // Use flex attempts first; then fall back to standard retries governed by provider.
+                if (use_flex_this_attempt && stream_flex_attempts_left > 0)
+                    || (!use_flex_this_attempt && std_stream_retries_remaining > 0)
+                {
                     retries += 1;
                     let delay = match e {
                         CodexErr::Stream(_, Some(delay)) => delay,
                         _ => backoff(retries),
                     };
+                    // If we're about to exhaust Flex attempts, notify that the next retry will fall back.
+                    let note = if original_is_flex && stream_flex_attempts_left == 1 {
+                        " (falling back to standard processing)"
+                    } else {
+                        ""
+                    };
+                    // Decrement the budget used for this attempt.
+                    if use_flex_this_attempt && stream_flex_attempts_left > 0 {
+                        stream_flex_attempts_left -= 1;
+                    } else if !use_flex_this_attempt && std_stream_retries_remaining > 0 {
+                        std_stream_retries_remaining -= 1;
+                    }
+                    let max_retries = turn_context.client.get_provider().stream_max_retries();
                     warn!(
-                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
+                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?}){note}..."
                     );
 
                     // Surface retry information to any UI/front‑end so the
@@ -1697,9 +1753,15 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         &sub_id,
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
+                        if note.is_empty() {
+                            format!(
+                                "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                            )
+                        } else {
+                            format!(
+                                "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}{note}…"
+                            )
+                        },
                     )
                     .await;
 

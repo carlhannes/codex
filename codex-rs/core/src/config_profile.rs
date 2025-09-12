@@ -22,6 +22,7 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
     pub model_service_tier: Option<ServiceTier>,
+    pub model_service_tier_flex_attempts: Option<u8>,
 }
 
 impl From<ConfigProfile> for codex_protocol::mcp_protocol::Profile {

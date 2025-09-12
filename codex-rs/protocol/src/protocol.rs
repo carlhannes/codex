@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use crate::config_types::ServiceTier;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
@@ -117,6 +118,10 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Updated model service tier (e.g., auto or flex).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier: Option<ServiceTier>,
     },
 
     /// Approve a command execution

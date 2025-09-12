@@ -123,6 +123,7 @@ impl ModelClient {
                     &self.client,
                     &self.provider,
                     service_tier,
+                    self.flex_attempts_before_fallback(),
                 )
                 .await?;
 
@@ -195,8 +196,14 @@ impl ModelClient {
 
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
+        let mut std_retries_remaining = max_retries;
         let desired_flex = matches!(self.config.model_service_tier, Some(ServiceTier::Flex));
-        let mut flex_fallback_used = false;
+        // Allow configured attempts using Flex before falling back to standard processing.
+        let mut flex_attempts_left: u8 = if desired_flex {
+            self.flex_attempts_before_fallback()
+        } else {
+            0
+        };
 
         // Compute effective idle timeout with flex tolerance.
         let mut effective_idle = self.provider.stream_idle_timeout();
@@ -213,11 +220,12 @@ impl ModelClient {
             // Always fetch the latest auth in case a prior attempt refreshed the token.
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
-            let service_tier = if desired_flex && !flex_fallback_used {
+            let service_tier = if flex_attempts_left > 0 {
                 Some("flex")
             } else {
                 None
             };
+            let used_flex = service_tier.is_some();
 
             let payload = ResponsesApiRequest {
                 model: &self.config.model,
@@ -335,35 +343,44 @@ impl ModelClient {
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
                                 return Err(CodexErr::UsageNotIncluded);
                             } else if error.code.as_deref() == Some("resource_unavailable")
-                                && desired_flex
-                                && !flex_fallback_used
+                                && used_flex
+                                && flex_attempts_left > 0
                             {
-                                // Retry once without service_tier to fall back to standard processing.
-                                flex_fallback_used = true;
+                                // Consume a flex attempt and retry immediately.
+                                flex_attempts_left -= 1;
                                 continue;
                             }
                         }
                     }
 
-                    if attempt > max_retries {
-                        if status == StatusCode::INTERNAL_SERVER_ERROR {
-                            return Err(CodexErr::InternalServerError);
-                        }
-
-                        return Err(CodexErr::RetryLimit(status));
-                    }
-
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))
                         .unwrap_or_else(|| backoff(attempt));
-                    tokio::time::sleep(delay).await;
+                    // Determine which budget to consume; if both exhausted, stop.
+                    if used_flex && flex_attempts_left > 0 {
+                        flex_attempts_left -= 1;
+                        tokio::time::sleep(delay).await;
+                    } else if std_retries_remaining > 0 {
+                        std_retries_remaining -= 1;
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        if status == StatusCode::INTERNAL_SERVER_ERROR {
+                            return Err(CodexErr::InternalServerError);
+                        }
+                        return Err(CodexErr::RetryLimit(status));
+                    }
                 }
                 Err(e) => {
-                    if attempt > max_retries {
+                    let delay = backoff(attempt);
+                    if used_flex && flex_attempts_left > 0 {
+                        flex_attempts_left -= 1;
+                        tokio::time::sleep(delay).await;
+                    } else if std_retries_remaining > 0 {
+                        std_retries_remaining -= 1;
+                        tokio::time::sleep(delay).await;
+                    } else {
                         return Err(e.into());
                     }
-                    let delay = backoff(attempt);
-                    tokio::time::sleep(delay).await;
                 }
             }
         }
@@ -395,6 +412,30 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    /// Returns the configured service tier for this client (if any).
+    pub fn get_service_tier(&self) -> Option<ServiceTier> {
+        self.config.model_service_tier
+    }
+
+    /// Clone this client with an overridden `model_service_tier`.
+    pub fn with_service_tier_override(&self, service_tier: Option<ServiceTier>) -> Self {
+        let mut cfg = (*self.config).clone();
+        cfg.model_service_tier = service_tier;
+        Self::new(
+            Arc::new(cfg),
+            self.auth_manager.clone(),
+            self.provider.clone(),
+            self.effort,
+            self.summary,
+            self.conversation_id,
+        )
+    }
+
+    /// Number of flex attempts before falling back to standard.
+    pub fn flex_attempts_before_fallback(&self) -> u8 {
+        self.config.model_service_tier_flex_attempts.unwrap_or(2)
     }
 }
 
