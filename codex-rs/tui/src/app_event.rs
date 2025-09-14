@@ -54,6 +54,8 @@ pub(crate) enum AppEvent {
 
     /// Update the current service tier in the running app and widget.
     UpdateServiceTier(ServiceTier),
+    /// Update the current flex attempts in the running app and widget.
+    UpdateServiceTierAttempts(u8),
 
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),

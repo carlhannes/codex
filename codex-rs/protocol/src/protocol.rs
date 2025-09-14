@@ -122,6 +122,10 @@ pub enum Op {
         /// Updated model service tier (e.g., auto or flex).
         #[serde(skip_serializing_if = "Option::is_none")]
         service_tier: Option<ServiceTier>,
+
+        /// Updated number of flex attempts before falling back to standard.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        service_tier_flex_attempts: Option<u8>,
     },
 
     /// Approve a command execution

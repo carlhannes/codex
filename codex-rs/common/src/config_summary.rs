@@ -28,6 +28,12 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
     if let Some(tier) = config.model_service_tier {
         entries.push(("service tier", tier.to_string()));
     }
+    // Show resolved attempts (configured or default of 2)
+    let attempts = config
+        .model_service_tier_flex_attempts
+        .unwrap_or(2)
+        .to_string();
+    entries.push(("service tier attempts", attempts));
 
     entries
 }

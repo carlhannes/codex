@@ -390,6 +390,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
             effort: Some(ReasoningEffort::High),
             summary: Some(ReasoningSummary::Detailed),
             service_tier: None,
+            service_tier_flex_attempts: None,
         })
         .await
         .unwrap();

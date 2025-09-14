@@ -13,6 +13,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::config_edit::CONFIG_KEY_SERVICE_TIER;
+use codex_core::config_edit::CONFIG_KEY_SERVICE_TIER_FLEX_ATTEMPTS;
 use codex_core::config_edit::persist_non_null_overrides;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
@@ -322,6 +323,15 @@ impl App {
                     "Service tier switched to {tier_str}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
                 ));
             }
+            AppEvent::UpdateServiceTierAttempts(n) => {
+                self.chat_widget.set_service_tier_attempts(n);
+                self.config.model_service_tier_flex_attempts = Some(n);
+                self.model_saved_to_profile = false;
+                self.model_saved_to_global = false;
+                self.chat_widget.add_info_message(format!(
+                    "Flex attempts set to {n}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
+                ));
+            }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.chat_widget.set_approval_policy(policy);
             }
@@ -394,6 +404,23 @@ impl App {
                         {
                             tracing::error!("failed to persist service tier for profile: {err}");
                         }
+                        if let Some(n) = self.config.model_service_tier_flex_attempts {
+                            let n_str = n.to_string();
+                            if let Err(err) = persist_non_null_overrides(
+                                &codex_home,
+                                Some(profile),
+                                &[(
+                                    &[CONFIG_KEY_SERVICE_TIER_FLEX_ATTEMPTS],
+                                    Some(n_str.as_str()),
+                                )],
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    "failed to persist flex attempts for profile: {err}"
+                                );
+                            }
+                        }
                         self.chat_widget.add_info_message(format!(
                             "Saved model {model} ({effort}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
                         ));
@@ -427,6 +454,21 @@ impl App {
                         .await
                         {
                             tracing::error!("failed to persist global service tier: {err}");
+                        }
+                        if let Some(n) = self.config.model_service_tier_flex_attempts {
+                            let n_str = n.to_string();
+                            if let Err(err) = persist_non_null_overrides(
+                                &codex_home,
+                                None,
+                                &[(
+                                    &[CONFIG_KEY_SERVICE_TIER_FLEX_ATTEMPTS],
+                                    Some(n_str.as_str()),
+                                )],
+                            )
+                            .await
+                            {
+                                tracing::error!("failed to persist global flex attempts: {err}");
+                            }
                         }
                         self.chat_widget.add_info_message(format!(
                             "Saved model {model} ({effort}) as your global default."

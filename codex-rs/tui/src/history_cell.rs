@@ -955,6 +955,10 @@ pub(crate) fn new_status_output(
     if !tier.is_empty() {
         lines.push(vec!["  • Service Tier: ".into(), title_case(&tier).into()].into());
     }
+    let attempts = lookup("service tier attempts");
+    if !attempts.is_empty() {
+        lines.push(vec!["  • Service Tier Attempts: ".into(), attempts.into()].into());
+    }
 
     lines.push("".into());
 

@@ -836,6 +836,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::ServiceTierAttempts => {
+                self.open_service_tier_attempts_popup();
+            }
             SlashCommand::ServiceTier => {
                 self.open_service_tier_popup();
             }
@@ -1189,6 +1192,7 @@ impl ChatWidget {
                     effort: Some(effort),
                     summary: None,
                     service_tier: None,
+                    service_tier_flex_attempts: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
@@ -1235,6 +1239,7 @@ impl ChatWidget {
                     effort: None,
                     summary: None,
                     service_tier: Some(tier),
+                    service_tier_flex_attempts: None,
                 }));
                 tx.send(AppEvent::UpdateServiceTier(tier));
             })];
@@ -1262,6 +1267,48 @@ impl ChatWidget {
         self.config.model_service_tier = Some(tier);
     }
 
+    /// Open a popup to choose the number of flex attempts before fallback.
+    pub(crate) fn open_service_tier_attempts_popup(&mut self) {
+        let current = self.config.model_service_tier_flex_attempts.unwrap_or(2);
+
+        let candidates: &[u8] = &[1, 2, 3, 5, 10];
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for &n in candidates.iter() {
+            let is_current = current == n;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    service_tier_flex_attempts: Some(n),
+                }));
+                tx.send(AppEvent::UpdateServiceTierAttempts(n));
+            })];
+
+            items.push(SelectionItem {
+                name: n.to_string(),
+                description: None,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Set Flex Attempts".to_string(),
+            Some("Number of flex retries before falling back to standard".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    pub(crate) fn set_service_tier_attempts(&mut self, n: u8) {
+        self.config.model_service_tier_flex_attempts = Some(n);
+    }
+
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
@@ -1284,6 +1331,7 @@ impl ChatWidget {
                     effort: None,
                     summary: None,
                     service_tier: None,
+                    service_tier_flex_attempts: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));

@@ -1101,6 +1101,7 @@ async fn submission_loop(
                 effort,
                 summary,
                 service_tier,
+                service_tier_flex_attempts,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
@@ -1130,6 +1131,9 @@ async fn submission_loop(
                 }
                 if let Some(tier) = service_tier {
                     updated_config.model_service_tier = Some(tier);
+                }
+                if let Some(n) = service_tier_flex_attempts {
+                    updated_config.model_service_tier_flex_attempts = Some(n);
                 }
 
                 let client = ModelClient::new(
@@ -1176,6 +1180,7 @@ async fn submission_loop(
                 // Optionally persist changes to model / effort
                 let effort_str = effort.map(|_| effective_effort.to_string());
                 let tier_str = service_tier.map(|t| t.to_string());
+                let attempts_str = service_tier_flex_attempts.map(|n| n.to_string());
 
                 if let Err(e) = persist_non_null_overrides(
                     &config.codex_home,
@@ -1186,6 +1191,10 @@ async fn submission_loop(
                         (
                             &[crate::config_edit::CONFIG_KEY_SERVICE_TIER],
                             tier_str.as_deref(),
+                        ),
+                        (
+                            &[crate::config_edit::CONFIG_KEY_SERVICE_TIER_FLEX_ATTEMPTS],
+                            attempts_str.as_deref(),
                         ),
                     ],
                 )
@@ -1732,10 +1741,36 @@ async fn run_turn(
                         _ => backoff(retries),
                     };
                     // If we're about to exhaust Flex attempts, notify that the next retry will fall back.
-                    let note = if original_is_flex && stream_flex_attempts_left == 1 {
+                    let note = if original_is_flex
+                        && use_flex_this_attempt
+                        && stream_flex_attempts_left == 1
+                    {
                         " (falling back to standard processing)"
                     } else {
                         ""
+                    };
+                    // Prepare compact reason tag
+                    let reason = match &e {
+                        CodexErr::Stream(msg, _) => {
+                            if msg.to_lowercase().contains("timeout") {
+                                "timeout"
+                            } else {
+                                "disconnected"
+                            }
+                        }
+                        _ => "error",
+                    };
+                    // Compute progress numbers for the next retry
+                    let (phase_label, used, total) = if use_flex_this_attempt {
+                        let total = turn_context.client.flex_attempts_before_fallback();
+                        let used =
+                            (total.saturating_sub(stream_flex_attempts_left)).saturating_add(1);
+                        ("Flex", used as u64, total as u64)
+                    } else {
+                        let total = turn_context.client.get_provider().stream_max_retries();
+                        let used =
+                            (total.saturating_sub(std_stream_retries_remaining)).saturating_add(1);
+                        ("Standard", used, total)
                     };
                     // Decrement the budget used for this attempt.
                     if use_flex_this_attempt && stream_flex_attempts_left > 0 {
@@ -1743,9 +1778,9 @@ async fn run_turn(
                     } else if !use_flex_this_attempt && std_stream_retries_remaining > 0 {
                         std_stream_retries_remaining -= 1;
                     }
-                    let max_retries = turn_context.client.get_provider().stream_max_retries();
                     warn!(
-                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?}){note}..."
+                        "[{phase_label}] stream retry {used}/{total} in {:?}{note} ({reason})",
+                        delay
                     );
 
                     // Surface retry information to any UI/front‑end so the
@@ -1753,15 +1788,9 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         &sub_id,
-                        if note.is_empty() {
-                            format!(
-                                "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                            )
-                        } else {
-                            format!(
-                                "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}{note}…"
-                            )
-                        },
+                        format!(
+                            "[{phase_label}] stream retry {used}/{total} in {delay:?}{note} ({reason})"
+                        ),
                     )
                     .await;
 

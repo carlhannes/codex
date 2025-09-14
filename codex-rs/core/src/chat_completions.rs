@@ -274,7 +274,6 @@ pub(crate) async fn stream_chat_completions(
     // Loop variables for retries and optional flex fallback.
     let mut attempt = 0;
     let max_retries = provider.request_max_retries();
-    let std_retries_remaining = max_retries;
     let mut std_retries_remaining = max_retries;
     let desired_flex = matches!(service_tier, Some("flex"));
     // Allow configured attempts using Flex before falling back to standard processing.
