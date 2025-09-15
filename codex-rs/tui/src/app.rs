@@ -18,7 +18,6 @@ use codex_core::config_edit::persist_non_null_overrides;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_core::protocol_config_types::ServiceTier;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
