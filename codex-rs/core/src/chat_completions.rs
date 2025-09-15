@@ -344,7 +344,7 @@ pub(crate) async fn stream_chat_completions(
                     #[derive(serde::Deserialize)]
                     struct ChatErr {
                         code: Option<String>,
-                        message: Option<String>,
+                        _message: Option<String>,
                     }
                     #[derive(serde::Deserialize)]
                     struct ChatErrResp {

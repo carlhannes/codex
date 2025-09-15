@@ -221,6 +221,7 @@ impl ModelClient {
             include,
             prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
+            service_tier: None,
         };
 
         let mut payload_json = serde_json::to_value(&base_payload)?;

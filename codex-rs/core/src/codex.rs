@@ -47,6 +47,9 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::config_edit::CONFIG_KEY_EFFORT;
+use crate::config_edit::CONFIG_KEY_MODEL;
+use crate::config_edit::persist_non_null_overrides;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
@@ -1209,7 +1212,10 @@ async fn submission_loop(
                 };
 
                 // Effective reasoning settings
-                let effective_effort = effort.or(prev.client.get_reasoning_effort());
+                let effective_effort = match effort {
+                    Some(inner) => inner,
+                    None => prev.client.get_reasoning_effort(),
+                };
                 let effective_summary = summary.unwrap_or(prev.client.get_reasoning_summary());
 
                 let auth_manager = prev.client.get_auth_manager();
@@ -1271,7 +1277,10 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
 
                 // Optionally persist changes to model / effort
-                let effort_str = effort.map(|_| effective_effort.to_string());
+                let effort_str = match effort {
+                    Some(Some(e)) => Some(e.to_string()),
+                    _ => None,
+                };
                 let tier_str = service_tier.map(|t| t.to_string());
                 let attempts_str = service_tier_flex_attempts.map(|n| n.to_string());
 
@@ -2002,6 +2011,7 @@ async fn run_turn(
                 sandbox_policy: turn_context.sandbox_policy.clone(),
                 shell_environment_policy: turn_context.shell_environment_policy.clone(),
                 tools_config: turn_context.tools_config.clone(),
+                is_review_mode: false,
             };
             &temp_turn_ctx_storage
         } else {
