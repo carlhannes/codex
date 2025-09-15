@@ -625,6 +625,7 @@ name = "codex-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "clap",
  "clap_complete",
  "codex-arg0",
@@ -637,7 +638,10 @@ dependencies = [
  "codex-protocol",
  "codex-protocol-ts",
  "codex-tui",
+ "predicates",
+ "pretty_assertions",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -666,6 +670,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codex-apply-patch",
+ "codex-file-search",
  "codex-mcp-client",
  "codex-protocol",
  "core_test_support",
@@ -733,6 +738,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "walkdir",
  "wiremock",
 ]
 
