@@ -1,6 +1,19 @@
 use std::time::Duration;
 
+use crate::ModelProviderInfo;
+use crate::client_common::Prompt;
+use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
+use crate::error::CodexErr;
+use crate::error::Result;
+use crate::model_family::ModelFamily;
+use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::util::backoff;
 use bytes::Bytes;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -15,19 +28,6 @@ use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
 
-use crate::ModelProviderInfo;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
-use crate::error::CodexErr;
-use crate::error::Result;
-use crate::model_family::ModelFamily;
-use crate::openai_tools::create_tools_json_for_chat_completions_api;
-use crate::util::backoff;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
-
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
@@ -36,7 +36,14 @@ pub(crate) async fn stream_chat_completions(
     provider: &ModelProviderInfo,
     service_tier: Option<&str>,
     flex_attempts: u8,
+    otel_event_manager: &OtelEventManager,
 ) -> Result<ResponseStream> {
+    if prompt.output_schema.is_some() {
+        return Err(CodexErr::UnsupportedOperation(
+            "output_schema is not supported for Chat Completions API".to_string(),
+        ));
+    }
+
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
@@ -292,8 +299,10 @@ pub(crate) async fn stream_chat_completions(
             "tools": tools_json,
         });
         let use_flex_this_attempt = flex_attempts_left > 0;
-        if use_flex_this_attempt && let Some(obj) = payload.as_object_mut() {
-            obj.insert("service_tier".to_string(), json!("flex"));
+        if use_flex_this_attempt {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("service_tier".to_string(), json!("flex"));
+            }
         }
 
         debug!(
@@ -302,10 +311,13 @@ pub(crate) async fn stream_chat_completions(
             serde_json::to_string_pretty(&payload).unwrap_or_default()
         );
 
-        let res = req_builder
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&payload)
-            .send()
+        let res = otel_event_manager
+            .log_request(attempt, || {
+                req_builder
+                    .header(reqwest::header::ACCEPT, "text/event-stream")
+                    .json(&payload)
+                    .send()
+            })
             .await;
 
         match res {
@@ -314,13 +326,18 @@ pub(crate) async fn stream_chat_completions(
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                 // Extend idle timeout under flex to tolerate slower starts.
                 let mut idle = provider.stream_idle_timeout();
-                if desired_flex {
+                if use_flex_this_attempt {
                     let flex_idle = Duration::from_secs(900);
                     if flex_idle > idle {
                         idle = flex_idle;
                     }
                 }
-                tokio::spawn(process_chat_sse(stream, tx_event, idle));
+                tokio::spawn(process_chat_sse(
+                    stream,
+                    tx_event,
+                    idle,
+                    otel_event_manager.clone(),
+                ));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
@@ -399,6 +416,7 @@ async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -422,7 +440,10 @@ async fn process_chat_sse<S>(
     let mut reasoning_text = String::new();
 
     loop {
-        let sse = match timeout(idle_timeout, stream.next()).await {
+        let sse = match otel_event_manager
+            .log_sse_event(|| timeout(idle_timeout, stream.next()))
+            .await
+        {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
                 let _ = tx_event
@@ -516,7 +537,7 @@ async fn process_chat_sse<S>(
             if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get("reasoning")) {
                 let mut maybe_text = reasoning_val
                     .as_str()
-                    .map(|s| s.to_string())
+                    .map(str::to_string)
                     .filter(|s| !s.is_empty());
 
                 if maybe_text.is_none() && reasoning_val.is_object() {
@@ -769,6 +790,9 @@ where
 
                     // Not an assistant message – forward immediately.
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,

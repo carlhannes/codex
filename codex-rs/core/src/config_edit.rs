@@ -138,7 +138,7 @@ async fn persist_overrides_with_behavior(
     } else {
         doc.get("profile")
             .and_then(|i| i.as_str())
-            .map(|s| s.to_string())
+            .map(str::to_string)
     };
 
     let mut mutated = false;
@@ -230,7 +230,7 @@ mod tests {
             codex_home,
             None,
             &[
-                (&[CONFIG_KEY_MODEL], "gpt-5"),
+                (&[CONFIG_KEY_MODEL], "gpt-5-codex"),
                 (&[CONFIG_KEY_EFFORT], "high"),
             ],
         )
@@ -238,7 +238,7 @@ mod tests {
         .expect("persist");
 
         let contents = read_config(codex_home).await;
-        let expected = r#"model = "gpt-5"
+        let expected = r#"model = "gpt-5-codex"
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
@@ -350,7 +350,7 @@ model_reasoning_effort = "high"
             &[
                 (&["a", "b", "c"], "v"),
                 (&["x"], "y"),
-                (&["profiles", "p1", CONFIG_KEY_MODEL], "gpt-5"),
+                (&["profiles", "p1", CONFIG_KEY_MODEL], "gpt-5-codex"),
             ],
         )
         .await
@@ -363,7 +363,7 @@ model_reasoning_effort = "high"
 c = "v"
 
 [profiles.p1]
-model = "gpt-5"
+model = "gpt-5-codex"
 "#;
         assert_eq!(contents, expected);
     }
@@ -456,7 +456,7 @@ existing = "keep"
             codex_home,
             None,
             &[
-                (&[CONFIG_KEY_MODEL], "gpt-5"),
+                (&[CONFIG_KEY_MODEL], "gpt-5-codex"),
                 (&[CONFIG_KEY_EFFORT], "minimal"),
             ],
         )
@@ -468,7 +468,7 @@ existing = "keep"
 # should be preserved
 
 existing = "keep"
-model = "gpt-5"
+model = "gpt-5-codex"
 model_reasoning_effort = "minimal"
 "#;
         assert_eq!(contents, expected);
@@ -526,7 +526,7 @@ model = "o3"
         let codex_home = tmpdir.path();
 
         // Seed with a model value only
-        let seed = "model = \"gpt-5\"\n";
+        let seed = "model = \"gpt-5-codex\"\n";
         tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), seed)
             .await
             .expect("seed write");
@@ -537,7 +537,7 @@ model = "o3"
             .expect("persist");
 
         let contents = read_config(codex_home).await;
-        let expected = r#"model = "gpt-5"
+        let expected = r#"model = "gpt-5-codex"
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
@@ -581,7 +581,7 @@ model = "o4-mini"
 
         // No active profile key; we'll target an explicit override
         let seed = r#"[profiles.team]
-model = "gpt-5"
+model = "gpt-5-codex"
 "#;
         tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), seed)
             .await
@@ -597,7 +597,7 @@ model = "gpt-5"
 
         let contents = read_config(codex_home).await;
         let expected = r#"[profiles.team]
-model = "gpt-5"
+model = "gpt-5-codex"
 model_reasoning_effort = "minimal"
 "#;
         assert_eq!(contents, expected);
@@ -613,7 +613,7 @@ model_reasoning_effort = "minimal"
             codex_home,
             None,
             &[
-                (&[CONFIG_KEY_MODEL], Some("gpt-5")),
+                (&[CONFIG_KEY_MODEL], Some("gpt-5-codex")),
                 (&[CONFIG_KEY_EFFORT], None),
             ],
         )
@@ -621,7 +621,7 @@ model_reasoning_effort = "minimal"
         .expect("persist");
 
         let contents = read_config(codex_home).await;
-        let expected = "model = \"gpt-5\"\n";
+        let expected = "model = \"gpt-5-codex\"\n";
         assert_eq!(contents, expected);
     }
 
@@ -672,7 +672,7 @@ model = "o3"
         let tmpdir = tempdir().expect("tmp");
         let codex_home = tmpdir.path();
 
-        let seed = r#"model = "gpt-5"
+        let seed = r#"model = "gpt-5-codex"
 model_reasoning_effort = "medium"
 "#;
         tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), seed)
